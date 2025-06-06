@@ -36,15 +36,57 @@ async function call() {
 async function enable_camera() {
 
   // *** TODO ***: define constraints: set video to true, audio to true
-  
+  const openMediaDevices = async (constraints) => {
+    return await navigator.mediaDevices.getUserMedia(constraints);
+  }
+
+  let stream
+
+  try {
+      stream = await openMediaDevices({'video':true,'audio':true});
+      console.log('Got MediaStream:', stream);
+  } catch(error) {
+      console.error('Error accessing media devices.', error);
+  }
+
   // *** TODO ***: uncomment the following log message
-  console.log('Getting user media with constraints', constraints);
+  //console.log('Getting user media with constraints', constraints);
 
   // *** TODO ***: use getUserMedia to get a local media stream from the camera.
   //               If this fails, use getDisplayMedia to get a screen sharing stream.
+  
 
-  document.getElementById('localVideo').srcObject = stream;
-  return stream;
+  if (stream) {
+    console.log('MediaStream in local video: ', stream);
+    document.getElementById('localVideo').srcObject = stream;
+    return stream;
+  } else {
+    const displayMediaOptions = {
+    video: {
+      displaySurface: "browser",
+    },
+    audio: {
+      suppressLocalAudioPlayback: false,
+    },
+    preferCurrentTab: false,
+    selfBrowserSurface: "exclude",
+    systemAudio: "include",
+    surfaceSwitching: "include",
+    monitorTypeSurfaces: "include",
+  };
+
+  let captureStream;
+
+  try {
+    captureStream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
+    console.log('Got display media stream:', captureStream);
+  } catch (err) {
+    console.error(`Error: ${err}`);
+  }
+    console.log('Display media with constraints in local video', displayMediaOptions);
+    document.getElementById('localVideo').srcObject = captureStream;
+    return captureStream;
+  }
 }
 
 // ==========================================================================
@@ -56,7 +98,8 @@ async function enable_camera() {
 function create_signaling_connection() {
   // *** TODO ***: create a socket by simply calling the io() function
   //               provided by the socket.io library (included in index.html).
-  //  const socket = ...
+  const socket = io();
+  console.log('Socket.io connection created: ', socket);
   return socket;
 }
 
@@ -69,6 +112,18 @@ function add_signaling_handlers(socket) {
   //               messages 'created', 'joined', 'full'.
   //               For all three messages, simply write a console log.
 
+  socket.on('created', function(room) {
+    console.log('Created room: ' + room);
+  }
+  );
+  socket.on('joined', function(room) {
+    console.log('Joined room: ' + room);
+  }
+  );
+  socket.on('full', function(room) {
+    console.log('Room ' + room + ' is full. Cannot join.');
+  }
+  );
 
   // Event handlers for call establishment signaling messages
   // --------------------------------------------------------
@@ -79,6 +134,28 @@ function add_signaling_handlers(socket) {
   // ice_candidate --> handle_remote_icecandidate
   // bye --> hangUp
 
+  socket.on('new_peer', function(room) {
+    handle_new_peer(room);
+  }
+  );
+  socket.on('invite', function(offer) {
+    handle_invite(offer);
+  }
+  );
+  socket.on('ok', function(answer) {
+    handle_ok(answer);
+  }
+  );
+  socket.on('ice_candidate', function(candidate) {
+    handle_remote_icecandidate(candidate);
+  }
+  );
+  socket.on('bye', function(room) {
+    hangUp();
+  }
+  );
+
+
 }
 
 // --------------------------------------------------------------------------
@@ -88,6 +165,9 @@ function call_room(socket) {
   if (room != '') {
       console.log('Joining room: ' + room);
       // *** TODO ***: send a join message to the server with room as argument.
+
+      socket.emit('join', room);
+      console.log('Join message sent to server: ', room);
 
   }
 }
@@ -103,9 +183,11 @@ function create_peerconnection(localStream) {
 
   // *** TODO ***: create a new RTCPeerConnection with this configuration
   // const pc = ...
+  const pc = new RTCPeerConnection(pcConfiguration);
+  console.log('Created RTCPeerConnection: ', pc);
 
   // *** TODO ***: add all tracks of the local stream to the peerConnection
-
+  localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
   return pc;
 }
 
@@ -118,6 +200,11 @@ function add_peerconnection_handlers(peerConnection) {
   // onicecandidate -> handle_local_icecandidate
   // ontrack -> handle_remote_track
   // ondatachannel -> handle_remote_datachannel
+
+  peerConnection.onicecandidate = handle_local_icecandidate;
+  peerConnection.ontrack = handle_remote_track;
+  peerConnection.ondatachannel = handle_remote_datachannel;
+  console.log('Added event handlers to peerConnection: ', peerConnection);
 }
 
 // ==========================================================================
@@ -132,8 +219,11 @@ async function handle_new_peer(room){
   create_datachannel(peerConnection); // MUST BE CALLED BEFORE createOffer
 
   // *** TODO ***: use createOffer (with await) generate an SDP offer for peerConnection
+  const offer = await peerConnection.createOffer()
   // *** TODO ***: use setLocalDescription (with await) to add the offer to peerConnection
+  await peerConnection.setLocalDescription(offer);
   // *** TODO ***: send an 'invite' message with the offer to the peer.
+  console.log('Sending invite offer to peer: ', offer);
   socket.emit('invite', offer); 
 }
 
@@ -143,9 +233,13 @@ async function handle_new_peer(room){
 async function handle_invite(offer) {
   console.log('Received Invite offer from Caller: ', offer);
   // *** TODO ***: use setRemoteDescription (with await) to add the offer SDP to peerConnection 
+  await peerConnection.setRemoteDescription(offer);
   // *** TODO ***: use createAnswer (with await) to generate an answer SDP
+  const answer = await peerConnection.createAnswer();
   // *** TODO ***: use setLocalDescription (with await) to add the answer SDP to peerConnection
+  await peerConnection.setLocalDescription(answer);
   // *** TODO ***: send an 'ok' message with the answer to the peer.
+  console.log('Sending OK answer to Caller: ', answer);
   socket.emit('ok', answer); 
 }
 
@@ -156,6 +250,8 @@ async function handle_ok(answer) {
   console.log('Received OK answer from Callee: ', answer);
   // *** TODO ***: use setRemoteDescription (with await) to add the answer SDP 
   //               the peerConnection
+  await peerConnection.setRemoteDescription(answer);
+  console.log('Set remote description with OK answer: ', answer);
 }
 
 // ==========================================================================
@@ -169,6 +265,13 @@ async function handle_local_icecandidate(event) {
   console.log('Received local ICE candidate: ', event);
   // *** TODO ***: check if there is a new ICE candidate.
   // *** TODO ***: if yes, send a 'ice_candidate' message with the candidate to the peer
+  
+  if (event.candidate !== null) {
+    socket.emit('ice_candidate', event.candidate);
+    console.log('ICE candidate sent: ', event.candidate);
+  } else {
+    console.log('End of candidates.');
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -176,6 +279,14 @@ async function handle_local_icecandidate(event) {
 async function handle_remote_icecandidate(candidate) {
   console.log('Received remote ICE candidate: ', candidate);
   // *** TODO ***: add the received remote ICE candidate to the peerConnection 
+  peerConnection.addIceCandidate(candidate)
+  .then(() => {
+    console.log('Remote ICE candidate added: ', candidate);
+  })
+  .catch(error => {
+    console.error('Error adding remote ICE candidate: ', error);
+  });
+  console.log('Added remote ICE candidate: ', candidate);
 
 }
 
@@ -190,6 +301,8 @@ function handle_remote_track(event) {
   console.log('Received remote track: ', event);
   // *** TODO ***: get the first stream of the event and show it in remoteVideo
   //document.getElementById('remoteVideo').srcObject = ...
+  document.getElementById('remoteVideo').srcObject = event.streams[0];
+  console.log('Remote video stream added: ', event.streams[0]);
 }
 
 // ==========================================================================
@@ -203,9 +316,13 @@ function create_datachannel(peerConnection) {
 
   // *** TODO ***: create a dataChannel on the peerConnection
   //dataChannel = ...
+  dataChannel = peerConnection.createDataChannel('dataChannel');
 
   // *** TODO ***: connect the handlers onopen and onmessage to the handlers below
   //dataChannel. ...
+  dataChannel.onopen = handle_datachannel_open;
+  dataChannel.onmessage = handle_datachannel_message;
+  console.log('DataChannel created: ', dataChannel);
 
 }
 
@@ -215,8 +332,13 @@ function handle_remote_datachannel(event) {
   console.log('Received remote dataChannel. I am Callee.');
 
   // *** TODO ***: get the data channel from the event
+  dataChannel = event.channel;
+  console.log('Remote dataChannel received: ', dataChannel);
 
   // *** TODO ***: add event handlers for onopen and onmessage events to the dataChannel
+  dataChannel.onopen = handle_datachannel_open;
+  dataChannel.onmessage = handle_datachannel_message;
+  console.log('DataChannel handlers added: ', dataChannel);
 
 }
 
@@ -235,6 +357,8 @@ function sendMessage() {
   document.getElementById('dataChannelOutput').value += '        ME: ' + message + '\n';
 
   // *** TODO ***: send the message through the dataChannel
+  dataChannel.send(message);
+  console.log('Message sent: ', message);
 
 }
 
@@ -251,19 +375,42 @@ function handle_datachannel_message(event) {
 // HangUp: Send a bye message to peer and close all connections and streams.
 function hangUp() {
   // *** TODO ***: Write a console log
+  console.log('HangUp: Closing connection and streams.');
 
   // *** TODO ***: send a bye message with the room name to the server
+  socket.emit('bye', room);
 
   // Switch off the local stream by stopping all tracks of the local stream
   const localVideo = document.getElementById('localVideo')
   const remoteVideo = document.getElementById('remoteVideo')
   // *** TODO ***: remove the tracks from localVideo and remoteVideo
+  const localStream = localVideo.srcObject;
+  if (localStream) {
+    localStream.getTracks().forEach(track => track.stop());
+    localVideo.srcObject = null;
+  }
+  const remoteStream = remoteVideo.srcObject;
+  if (remoteStream) {
+    remoteStream.getTracks().forEach(track => track.stop());
+    remoteVideo.srcObject = null;
+  }
 
   // *** TODO ***: set localVideo and remoteVideo source objects to null
+  localVideo.srcObject = null;
+  remoteVideo.srcObject = null;
 
   // *** TODO ***: close the peerConnection and set it to null
+  peerConnection.close();
+  peerConnection = null;
 
   // *** TODO ***: close the dataChannel and set it to null
+  dataChannel.close();
+  dataChannel = null;
+
+  remoteVideo.removeAttribute("src");
+  remoteVideo.removeAttribute("srcObject");
+  localVideo.removeAttribute("src");
+  localVideo.removeAttribute("srcObject");
 
   document.getElementById('dataChannelOutput').value += '*** Channel is closed ***\n';
 }
